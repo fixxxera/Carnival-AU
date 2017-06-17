@@ -7,7 +7,7 @@ import xlsxwriter
 session = requests.Session()
 currency = "AUD"
 data = {"CurrencyCode": currency, "PageSize": 200, "PageNumber": 1, "SortExpression": "FirstSailDate"}
-page = session.post("http://www.carnival.com.au/DomainData/SailingSearch/Get/", data=data)
+page = session.post("https://www.carnival.com.au/DomainData/SailingSearch/Get/", data=data)
 cruise_data = page.json()
 data_array = []
 special_list = []
