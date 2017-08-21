@@ -1,18 +1,15 @@
 import datetime
+import smtplib
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+
 import os
+
+import sys
 
 import requests
 import xlsxwriter
-
-session = requests.Session()
-currency = "AUD"
-data = {"CurrencyCode": currency, "PageSize": 200, "PageNumber": 1, "SortExpression": "FirstSailDate"}
-page = session.post("https://www.carnival.com.au/DomainData/SailingSearch/Get/", data=data)
-cruise_data = page.json()
-data_array = []
-special_list = []
-tmp_legend_array = []
-tmp_spirit_array = []
 
 
 def check_if_correct(days_before_correct, ports):
@@ -116,63 +113,103 @@ def match_by_meta(param):
         return result
 
 
-for row in cruise_data['Voyages']:
-    is_special = False
-    interior_price = row['FromIPrice']
-    if interior_price != 'N/A':
-        interior_price = interior_price.replace(" AUD", '').split('.')[0].replace(',', '')
-    ocean_view = row['FromOPrice']
-    if ocean_view != 'N/A':
-        ocean_view = ocean_view.replace(" AUD", '').split('.')[0].replace(',', '')
-    balcony = row['FromBPrice']
-    if balcony != 'N/A':
-        balcony = balcony.replace(" AUD", '').split('.')[0].replace(',', '')
-    suite = row['FromSPrice']
-    if suite != 'N/A':
-        suite = suite.replace(" AUD", '').split('.')[0].replace(',', '')
-    total_days = row['CruiseNights']
-    corrected_days = check_if_correct(total_days, row['PortsVisited'])
-    formatted_date = get_date(corrected_days, row['DateRangeText'])
-    departure_date = formatted_date[0]
-    arrival_date = formatted_date[1]
-    ship_name = row['ShipName']
-    title = row['VoyageTitle']
-    destination = match_by_meta(row['PortsVisited'])
-    dest = destination[0]
-    destination_code = destination[1]
-    if ship_name == 'Legend':
-        legend_array = [destination_code, dest, str(6), ship_name, str(2), 'Carnival Cruise Lines', '',
-                        title,
-                        total_days, departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
-        tmp_legend_array.append(legend_array)
-    else:
-        spirit_array = [destination_code, dest, str(9), ship_name, str(2), 'Carnival Cruise Lines', '',
-                        title,
-                        total_days, departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
-        tmp_spirit_array.append(spirit_array)
-    for l in row['PortsVisited']:
-        if 'IDL' in l['PortCode']:
-            is_special = True
-    if is_special:
-        tmp = [destination_code, dest, str(6), ship_name, str(2), 'Carnival Cruise Lines', '', title, total_days,
-               departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
-        special_list.append(tmp)
-data_array.append(tmp_legend_array)
-data_array.append(tmp_spirit_array)
+def lambda_handle(event, context):
+    session = requests.Session()
+    currency = "AUD"
+    data = {"CurrencyCode": currency, "PageSize": 200, "PageNumber": 1, "SortExpression": "FirstSailDate"}
+    page = session.post("https://www.carnival.com.au/DomainData/SailingSearch/Get/", data=data, timeout=60)
+    cruise_data = page.json()
+    data_array = []
+    special_list = []
+    tmp_legend_array = []
+    tmp_spirit_array = []
+    for row in cruise_data['Voyages']:
+        is_special = False
+        interior_price = row['FromIPrice']
+        if interior_price != 'N/A':
+            interior_price = interior_price.replace(" AUD", '').split('.')[0].replace(',', '')
+        ocean_view = row['FromOPrice']
+        if ocean_view != 'N/A':
+            ocean_view = ocean_view.replace(" AUD", '').split('.')[0].replace(',', '')
+        balcony = row['FromBPrice']
+        if balcony != 'N/A':
+            balcony = balcony.replace(" AUD", '').split('.')[0].replace(',', '')
+        suite = row['FromSPrice']
+        if suite != 'N/A':
+            suite = suite.replace(" AUD", '').split('.')[0].replace(',', '')
+        total_days = row['CruiseNights']
+        corrected_days = check_if_correct(total_days, row['PortsVisited'])
+        formatted_date = get_date(corrected_days, row['DateRangeText'])
+        departure_date = formatted_date[0]
+        arrival_date = formatted_date[1]
+        ship_name = row['ShipName']
+        title = row['VoyageTitle']
+        destination = match_by_meta(row['PortsVisited'])
+        dest = destination[0]
+        destination_code = destination[1]
+        if ship_name == 'Legend':
+            legend_array = [destination_code, dest, str(6), ship_name, str(2), 'Carnival Cruise Lines', '',
+                            title,
+                            total_days, departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
+            tmp_legend_array.append(legend_array)
+        else:
+            spirit_array = [destination_code, dest, str(9), ship_name, str(2), 'Carnival Cruise Lines', '',
+                            title,
+                            total_days, departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
+            tmp_spirit_array.append(spirit_array)
+        for l in row['PortsVisited']:
+            if 'IDL' in l['PortCode']:
+                is_special = True
+        if is_special:
+            tmp = [destination_code, dest, str(6), ship_name, str(2), 'Carnival Cruise Lines', '', title, total_days,
+                   departure_date, arrival_date, interior_price, ocean_view, balcony, suite]
+            special_list.append(tmp)
+        data_array.append(tmp_legend_array)
+        data_array.append(tmp_spirit_array)
+    write_file_to_excell(data_array)
+    write_special_to_excell(special_list)
+    outer = MIMEMultipart()
+    outer['Subject'] = 'Carnival'
+    outer['To'] = "martin.baltuhin@gmail.com"
+    outer['From'] = "martin.baltuhin@gmail.com"
+    outer.preamble = 'You will not see this in a MIME-aware mail read'
+    now = datetime.datetime.now()
+    recipients = ["martin.baltuhin@gmail.com"]
+    attachments = ["/tmp/" + str(now.year) + '-' + str(now.month) + '-' + str(now.day) + '- Carnival Australia.xlsx']
+    for file in attachments:
+        try:
+            with open(file, 'rb') as fp:
+                msg = MIMEBase('application', "octet-stream")
+                msg.set_payload(fp.read())
+            encoders.encode_base64(msg)
+            msg.add_header('Content-Disposition', 'attachment', filename=os.path.basename(file))
+            outer.attach(msg)
+        except:
+            print("Unable to open one of the attachments. Error: ", sys.exc_info()[0])
+            raise
+    composed = outer.as_string()
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as s:
+            # s.starttls()
+            s.ehlo()
+            s.login("martin.baltuhin@gmail.com", "8703016660f!")
+            s.sendmail("martin.baltuhin@gmail.com", recipients, composed)
+            s.close()
+        print("Email sent!")
+    except:
+        print("Unable to send the email. Error: ", sys.exc_info()[0])
+        raise
+    return {
+        "statusCode": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": "Success!"
+    }
 
 
 def write_file_to_excell(data_array):
-    userhome = os.path.expanduser('~')
-    # print(userhome)
     now = datetime.datetime.now()
-    path_to_file = userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(now.month) + '-' + str(
-        now.day) + '/' + str(now.year) + '-' + str(now.month) + '-' + str(now.day) + '- Carnival Australia.xlsx'
-    if not os.path.exists(userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(
-            now.month) + '-' + str(now.day)):
-        os.makedirs(
-            userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(now.month) + '-' + str(now.day))
-    workbook = xlsxwriter.Workbook(path_to_file)
-
+    path_to_file = "/tmp/" + str(now.year) + '-' + str(now.month) + '-' + str(now.day) + '- Carnival Australia.xlsx'
+    workbook = xlsxwriter.Workbook(path_to_file, {'tmpdir': '/tmp/'})
     worksheet = workbook.add_worksheet()
     bold = workbook.add_format({'bold': True})
     worksheet.set_column("A:A", 15)
@@ -321,22 +358,10 @@ def write_file_to_excell(data_array):
     pass
 
 
-write_file_to_excell(data_array)
-
-
 def write_special_to_excell(special_list):
-    userhome = os.path.expanduser('~')
-    # print(userhome)
     now = datetime.datetime.now()
-    path_to_file = userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(now.month) + '-' + str(
-        now.day) + '/' + str(now.year) + '-' + str(now.month) + '-' + str(
-        now.day) + '- Carnival Australia special list.xlsx'
-    if not os.path.exists(userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(
-            now.month) + '-' + str(now.day)):
-        os.makedirs(
-            userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(now.month) + '-' + str(now.day))
-    workbook = xlsxwriter.Workbook(path_to_file)
-
+    path_to_file = "/tmp/" + str(now.year) + '-' + str(now.month) + '-' + str(now.day) + '- Carnival Australia Special List.xlsx'
+    workbook = xlsxwriter.Workbook(path_to_file, {'tmpdir': '/tmp/'})
     worksheet = workbook.add_worksheet()
     bold = workbook.add_format({'bold': True})
     worksheet.set_column("A:A", 15)
@@ -482,4 +507,3 @@ def write_special_to_excell(special_list):
         row_count += 1
     workbook.close()
 
-write_special_to_excell(special_list)
