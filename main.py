@@ -335,6 +335,7 @@ def write_special_to_excell(special_list):
             now.month) + '-' + str(now.day)):
         os.makedirs(
             userhome + '/Dropbox/XLSX/For Assia to test/' + str(now.year) + '-' + str(now.month) + '-' + str(now.day))
+    print(path_to_file)
     workbook = xlsxwriter.Workbook(path_to_file)
 
     worksheet = workbook.add_worksheet()
